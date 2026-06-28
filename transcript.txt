@@ -1,0 +1,76 @@
+TRANSCRIPT — agent_loop.py two-turn memory demo
+================================================
+$ python agent_loop.py
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  DEMO: Two-turn conversation proving short-term memory
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+══════════════════════════════════════════════════════════════
+  USER  ▶  What did order A1001 cost?
+══════════════════════════════════════════════════════════════
+
+  [step 1/5]  Sending 1 message(s) to model …
+  [step 1]  Tool call  → lookup_order({'order_id': 'A1001'})
+  [step 1]  Tool result← {'order_id': 'A1001', 'item': 'laptop', 'price': 1200, 'purchased': '2026-05-20', 'warranty_months': 12}
+  [step 2/5]  Sending 3 message(s) to model …
+  MODEL ◀  The A1001 order cost $1200.
+
+══════════════════════════════════════════════════════════════
+  USER  ▶  And what about three of them?
+══════════════════════════════════════════════════════════════
+
+  [step 1/5]  Sending 5 message(s) to model …
+  [step 1]  Tool call  → calculate({'expression': '1200 * 3'})
+  [step 1]  Tool result← {'expression': '1200 * 3', 'result': 3600}
+  [step 2/5]  Sending 7 message(s) to model …
+  MODEL ◀  Three of them would cost $3600.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  FINAL SUMMARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Turn 1 : The A1001 order cost $1200.
+  Turn 2 : Three of them would cost $3600.
+  Memory : 8 content blocks in history
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+WHY TURN 2 WORKS — memory trace
+---------------------------------
+After Turn 1, `messages` holds 4 content blocks:
+  [0] user   → "What did order A1001 cost?"
+  [1] model  → function_call: lookup_order(A1001)
+  [2] tool   → function_response: {price: 1200, item: laptop, …}
+  [3] model  → "The A1001 order cost $1200."
+
+Turn 2 appends the new user message → 5 blocks sent to model.
+The model sees block [3] and already knows price = $1200,
+so it calls calculate('1200 * 3') without re-looking up the order.
+Strip any prior block → Turn 2 breaks or gives a wrong answer.
+
+HOW THE LOOP WORKS — step by step
+------------------------------------
+Each iteration:
+  1. Call model with full messages list
+  2. If response contains function_call parts → run the tool,
+     append result as a "tool" content block, loop again
+  3. If response is plain text → return it, stop
+
+Step limit (max_steps=5) guarantees the loop always terminates.
+If hit, the agent prints a warning instead of running forever.
+
+OPTIONAL STRETCH — MCP vs hand-wired tools
+--------------------------------------------
+Hand-wired (what we do here):
+  result = lookup_order(order_id="A1001")   # direct Python call
+
+With MCP the same dispatch goes through the standard protocol:
+  session = await ClientSession(read, write)
+  result  = await session.call_tool("lookup_order", {"order_id": "A1001"})
+
+The model side is identical — same FunctionDeclaration JSON either way.
+The difference is entirely in dispatch:
+  - MCP uses JSON-RPC over stdio/SSE, so tools can live in a
+    separate process, a remote server, or be hot-swapped without
+    touching agent_loop.py.
+  - Hand-wired functions are simpler but tightly coupled to this file.
